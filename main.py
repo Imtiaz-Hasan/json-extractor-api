@@ -10,10 +10,9 @@ import re
 
 app = FastAPI()
 
-# Enable CORS for external frontend testing
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # You can restrict this later if needed
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -25,27 +24,28 @@ class ImageRequest(BaseModel):
 @app.post("/")
 async def extract_json(request: ImageRequest):
     try:
-        # Remove prefix from base64 string
         base64_str = request.imageBase64.split(",")[1]
         image_data = base64.b64decode(base64_str)
         image = Image.open(io.BytesIO(image_data))
 
-        # Perform OCR
         ocr_text = pytesseract.image_to_string(image)
         ocr_text = ocr_text.replace("\n", " ").strip()
 
-        # Try to extract JSON object from OCR text
-        json_match = re.search(r"\{[\s\S]*?\}", ocr_text)
-        if not json_match:
-            raise ValueError("No JSON found")
+        # Try extracting valid JSON(s)
+        potential_jsons = re.findall(r"\{.*?\}", ocr_text)
+        for match in potential_jsons:
+            try:
+                extracted_json = json.loads(match)
+                return {
+                    "success": True,
+                    "data": extracted_json,
+                    "message": "Successfully extracted JSON from image"
+                }
+            except:
+                continue
 
-        extracted_json = json.loads(json_match.group())
+        raise ValueError("No valid JSON object found")
 
-        return {
-            "success": True,
-            "data": extracted_json,
-            "message": "Successfully extracted JSON from image"
-        }
     except Exception as e:
         return {
             "success": False,
