@@ -4,9 +4,10 @@ from pydantic import BaseModel
 import base64
 import io
 import pytesseract
-from PIL import Image
+from PIL import Image, ImageEnhance
 import json
 import re
+from typing import Dict, Any
 
 app = FastAPI()
 
@@ -21,9 +22,9 @@ app.add_middleware(
 class ImageRequest(BaseModel):
     imageBase64: str
 
-def validate_json_data(data):
+def validate_json_data(data: Dict[str, Any]) -> bool:
     required_fields = ['name', 'organization', 'address', 'mobile']
-    return all(field in data for field in required_fields)
+    return all(field in data and isinstance(data[field], str) and data[field].strip() for field in required_fields)
 
 @app.post("/")
 async def extract_json(request: ImageRequest):
@@ -33,13 +34,25 @@ async def extract_json(request: ImageRequest):
         image_data = base64.b64decode(base64_str)
         image = Image.open(io.BytesIO(image_data))
         
-        # Enhance OCR configuration
-        custom_config = r'--oem 3 --psm 6'
+        # Convert to RGB if needed
+        if image.mode != 'RGB':
+            image = image.convert('RGB')
+        
+        # Enhance image quality
+        enhancer = ImageEnhance.Contrast(image)
+        image = enhancer.enhance(1.5)  # Increase contrast
+        enhancer = ImageEnhance.Sharpness(image)
+        image = enhancer.enhance(1.5)  # Increase sharpness
+        
+        # Enhanced OCR configuration with better accuracy
+        custom_config = r'--oem 3 --psm 6 -c tessedit_char_whitelist={}[]":,./\\-_@#$%^&*()abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
         ocr_text = pytesseract.image_to_string(image, config=custom_config)
         
-        # Clean and normalize text
+        # Improved text cleaning and normalization
         ocr_text = re.sub(r'[\n\r]+', ' ', ocr_text)
         ocr_text = re.sub(r'\s+', ' ', ocr_text).strip()
+        ocr_text = re.sub(r'[\u201c\u201d]', '"', ocr_text)  # Replace smart quotes
+        ocr_text = re.sub(r'[\u2018\u2019]', "'", ocr_text)  # Replace smart single quotes
         
         # Enhanced JSON extraction pattern
         json_pattern = r'\{(?:[^{}]|\{[^{}]*\})*\}'
@@ -48,8 +61,10 @@ async def extract_json(request: ImageRequest):
         for match in potential_jsons:
             try:
                 json_str = match.group()
-                # Normalize quotes and fix common OCR issues
+                # Advanced normalization and OCR error correction
                 json_str = json_str.replace("'", '"')
+                json_str = re.sub(r'(\w+)\s*:', r'"\1":', json_str)  # Fix unquoted keys
+                json_str = re.sub(r':\s*([^"\s{\[]+)([,}])', r': "\1"\2', json_str)  # Fix unquoted values
                 extracted_json = json.loads(json_str)
                 
                 if validate_json_data(extracted_json):
